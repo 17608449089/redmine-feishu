@@ -1,59 +1,44 @@
 = Redmine（飞书任务同步版）
 
-本仓库基于 {Redmine}[https://www.redmine.org] 核心，增加 *Redmine Issue → 飞书任务* 单向同步，并提供与官方 <code>redmine:latest</code> 兼容的 SQLite Docker 镜像。飞书侧改动不会回写 Redmine。
+基于 {Redmine}[https://www.redmine.org]：在 Redmine 里建问题、改状态、改内容，会同步成飞书任务。飞书里改任务 *不会* 写回 Redmine。
 
-官方文档仍见 <code>doc/</code> 与 https://www.redmine.org 。飞书与镜像细节见 <code>doc/feishu-task-sync.md</code>。
+更细的镜像与数据说明见 <code>doc/feishu-task-sync.md</code>。
 
-== 同步行为
+== 怎么用（按顺序做）
 
-公开问题在「全局开关 + 项目模块」都开启时才会同步：
+=== 1. 准备飞书应用
 
-* 新建问题 → 创建飞书任务
-* 改标题、描述、状态、日期、指派人 → 更新飞书任务
-* 关闭 → 任务标记完成；重新打开 → 取消完成
-* 删除问题，或改为私有 → 删除飞书任务
-* 私有问题不同步
+1. 打开 {飞书开放平台}[https://open.feishu.cn/]，创建 *企业自建应用*
+2. 开通权限并 *发布* 到本企业：
+   * <code>task:task:write</code>（创建/更新/删除任务、加人）
+   * <code>contact:user.id:readonly</code>（用邮箱查用户；没有邮箱可跳过，改用默认 open_id）
+3. 记下 App ID、App Secret
+4. 在开放平台 *API 调试台* 查自己的用户 <code>open_id</code>（<code>ou_</code> 开头）。至少准备一个，否则任务可能创建成功但飞书界面找不到
 
-任务标题形如：<code>#35 [进行中] 标题</code>。正文第一行是状态，后面是问题描述。开始/截止日期会一并写入。
+=== 2. 启动 Redmine
 
-成员：
+生产（替换已有官方 SQLite 容器，保留原账号和问题）：
 
-1. 指派人邮箱能匹配到飞书用户时，加入该用户
-2. 后台填写的默认 <code>open_id</code>（可多个）也会加入，否则应用创建的任务在飞书里往往看不到
+1. 使用 linux/amd64 镜像 <code>redmine-feishu:latest</code>（不要用 Mac ARM 打的包）
+2. compose *只改* <code>image: redmine-feishu:latest</code>
+3. *不要改*：volume 名字、挂载路径、<code>REDMINE_SECRET_KEY_BASE</code>
+4. *不要* 执行 <code>docker compose down -v</code>
 
-已有问题不会批量补同步，只有保存/更新之后才会写入飞书。
+  docker load < redmine-feishu.tar.gz
+  docker compose up -d
 
-== 飞书应用
-
-在 {飞书开放平台}[https://open.feishu.cn/] 创建企业自建应用并发布：
-
-* <code>task:task:write</code>
-* <code>contact:user.id:readonly</code>（用邮箱查 open_id；没有邮箱则靠默认 open_id）
-
-open_id 在开放平台 API 调试台查询，形如 <code>ou_</code> 开头。
-
-== 后台配置（正式环境必须单独配）
-
-本地配过的开关 *不会* 出现在生产库里。管理员登录正式站点后：
-
-1. *管理 → 设置 → 集成*：勾选「启用飞书任务同步」；填写 App ID、App Secret；默认 open_id 可多个（逗号、空格或换行分隔）
-2. 每个要同步的项目：*设置 → 模块 → 勾选「飞书任务同步」→ 保存*
-
-只开全局、不勾项目模块时，日志为：
-
-  Feishu sync skipped ... global=true module=false
-
-== Docker（替换官方镜像、保留原数据）
-
-镜像名 <code>redmine-feishu:latest</code>，架构必须是 *linux/amd64*（在 Apple Silicon 上构建时 compose 已指定 platform）。
-
-官方 <code>redmine:latest</code> *不读取* <code>REDMINE_DB_SQLITE</code>。真正的库文件一直是：
+官方镜像不读 <code>REDMINE_DB_SQLITE</code>。真正的库文件是：
 
   /usr/src/redmine/sqlite/redmine.db
 
-本镜像与之相同。若误连 <code>redmine.sqlite3</code> 会看到空站点，旧数据仍在 <code>redmine.db</code>。换镜像时 *不要改* volume 名、挂载路径和 <code>REDMINE_SECRET_KEY_BASE</code>，也不要 <code>docker compose down -v</code>。
+compose 里即使写着 <code>redmine.sqlite3</code> 也可以留着，本镜像同样只用 <code>redmine.db</code>。
 
-生产 compose 只需把 <code>image</code> 换成 <code>redmine-feishu:latest</code>：
+本机从源码构建再导出：
+
+  docker compose build
+  docker save redmine-feishu:latest | gzip > redmine-feishu.tar.gz
+
+compose 示例（端口、密钥、volume 按你现网填写）：
 
   services:
     redmine:
@@ -63,57 +48,73 @@ open_id 在开放平台 API 调试台查询，形如 <code>ou_</code> 开头。
       ports:
         - "12323:3000"
       environment:
-        REDMINE_DB_SQLITE: redmine.sqlite3   # 官方也不读，可保留
-        REDMINE_SECRET_KEY_BASE: <与原来相同>
+        REDMINE_SECRET_KEY_BASE: <必须和原来相同>
       volumes:
         - redmine_sqlite_data:/usr/src/redmine/sqlite
         - redmine_files_data:/usr/src/redmine/files
-
   volumes:
     redmine_sqlite_data:
     redmine_files_data:
 
-  docker load < redmine-feishu.tar.gz
-  docker compose up -d
+可选环境变量（优先于后台填写）：<code>FEISHU_APP_ID</code>、<code>FEISHU_APP_SECRET</code>、<code>FEISHU_API_BASE</code>（默认 https://open.feishu.cn）。
 
-启动时自动迁移，只新增飞书映射表，不清空用户和 Issue。容器内 Active Job 使用 *inline*，同步在请求内执行，无需单独 worker。
+启动后会自动跑迁移，只加飞书映射表，不会清空用户和 Issue。
 
-可选环境变量（写入 <code>configuration.yml</code>，优先于后台设置）：<code>FEISHU_APP_ID</code>、<code>FEISHU_APP_SECRET</code>、<code>FEISHU_API_BASE</code>。
+=== 3. 打开同步（正式站要再配一遍）
 
-本机构建：
+本地配过的开关 *不会* 带到生产库。用 *管理员* 登录 *当前这套* Redmine：
 
-  docker compose build
-  docker save redmine-feishu:latest | gzip > redmine-feishu.tar.gz
+1. 打开 *管理 → 设置 → 集成*
+2. 勾选「启用飞书任务同步」
+3. 填写 App ID、App Secret（若没用环境变量）
+4. 「默认飞书用户 open_id」填一个或多个，逗号、空格或换行均可，例如：
 
-== 本次改动摘要
+     ou_aaa
+     ou_bbb, ou_ccc
 
-=== 飞书同步
+5. 保存
+6. 打开要同步的 *项目 → 设置 → 模块*
+7. 勾选「飞书任务同步」并保存。每个项目都要勾，只开全局不够
 
-* <code>lib/redmine/feishu.rb</code>、<code>lib/redmine/feishu/client.rb</code>、<code>lib/redmine/feishu/task_sync.rb</code>
-* <code>app/jobs/feishu_task_sync_job.rb</code>、<code>app/models/concerns/issue/feishu_syncable.rb</code>
-* <code>app/models/feishu_task_mapping.rb</code>、<code>app/models/feishu_user_mapping.rb</code>
-* 迁移：<code>db/migrate/20261005040000_create_feishu_sync_tables.rb</code>、<code>db/migrate/20261005073000_widen_feishu_assignee_open_id.rb</code>
-* 设置与文案：<code>config/settings.yml</code>、<code>config/locales/en.yml</code>、<code>config/locales/zh.yml</code>
-* 界面：<code>app/views/settings/_feishu.html.erb</code>、<code>app/views/settings/_api.html.erb</code>
-* 权限/模块：<code>lib/redmine/preparation.rb</code>；Issue 回调：<code>app/models/issue.rb</code>
+=== 4. 日常操作
 
-=== Docker
+在已勾选模块的项目里：
 
-* <code>Dockerfile</code>、<code>docker-compose.yml</code>、<code>.dockerignore</code>
-* <code>docker/entrypoint.sh</code>、<code>docker/database.yml</code>、<code>docker/Gemfile.local</code>
-* <code>config/puma.rb</code>
+* 新建问题 → 飞书出现对应任务
+* 改标题、描述、状态、日期、指派人 → 飞书任务跟着改
+* 关闭问题 → 飞书任务完成；重新打开 → 取消完成
+* 删除问题，或改成私有 → 删除飞书任务
 
-=== 测试
+飞书标题形如 <code>#35 [进行中] 标题</code>，正文第一行是状态，后面是描述。
 
-* <code>test/unit/lib/redmine/feishu/task_sync_test.rb</code>
-* <code>test/unit/jobs/feishu_task_sync_job_test.rb</code>
+已有问题不会自动全部推过去，对旧问题 *再保存一次* 才会同步。私有问题不同步。
 
-== 排查
+指派人有飞书邮箱时会加为任务成员；无论是否匹配成功，默认 open_id 列表里的人都会加入。
+
+到飞书「任务 / 我的任务」查看。
+
+== 日志怎么看
 
   docker logs -f redmine-app
 
-* <code>global=false</code>：未开全局开关
-* <code>module=false</code>：该项目未勾选「飞书任务同步」
-* 日志成功但飞书看不到：默认 open_id 未填/填错，或应用权限未发布
-* 换镜像后像空站：连错了 <code>redmine.sqlite3</code>，或 volume / <code>REDMINE_SECRET_KEY_BASE</code> 被改掉
-* 同步失败只写日志，不阻断保存问题
+改完问题后：
+
+* <code>Feishu sync running issue=35</code>：已执行同步
+* <code>global=false</code>：未开「启用飞书任务同步」
+* <code>module=false</code>：当前项目未勾选模块（最常见）
+* <code>failed:</code> / <code>error:</code>：App ID/Secret、权限或网络有问题
+
+同步失败只写日志，Redmine 里照样能保存问题。
+
+其它：
+
+* 日志成功但飞书看不到：默认 open_id 未填/填错，或应用权限没发布
+* 换镜像后像空站：连错库文件，或动了 volume / 密钥。换回官方 <code>redmine:latest</code> 能恢复则数据还在
+
+== 改了哪些文件
+
+同步：<code>lib/redmine/feishu*</code>、<code>app/jobs/feishu_task_sync_job.rb</code>、<code>app/models/concerns/issue/feishu_syncable.rb</code>、mapping 模型与两次 db/migrate、设置/locale/集成页、<code>lib/redmine/preparation.rb</code>、<code>app/models/issue.rb</code>
+
+Docker：<code>Dockerfile</code>、<code>docker-compose.yml</code>、<code>docker/</code>、<code>.dockerignore</code>、<code>config/puma.rb</code>
+
+测试：<code>test/unit/lib/redmine/feishu/task_sync_test.rb</code>、<code>test/unit/jobs/feishu_task_sync_job_test.rb</code>
