@@ -377,3 +377,16 @@ wiki_tablesort_enabled:
   default: 0
 reactions_enabled:
   default: 1
+feishu_task_sync_enabled:
+  default: 0
+  security_notifications: 1
+feishu_app_id:
+  default: ''
+  security_notifications: 1
+feishu_app_secret:
+  default: ''
+  security_notifications: 1
+feishu_api_base:
+  default: https://open.feishu.cn
+feishu_default_open_id:
+  default: ''

@@ -437,6 +437,7 @@ zh:
   project_module_boards: 讨论区
   project_module_calendar: 日历
   project_module_gantt: 甘特图
+  project_module_feishu_task_sync: 飞书任务同步
 
   label_user: 用户
   label_user_plural: 用户
@@ -1456,6 +1457,7 @@ zh:
   label_message: Message
   twofa_already_setup: Two-factor authentication already set up
   permission_use_webhooks: Use webhooks
+  permission_sync_issues_to_feishu: 同步问题到飞书任务
   label_webhook_plural: Webhooks
   label_webhook_new: New webhook
   label_webhook_edit: Edit webhook
@@ -1465,6 +1467,13 @@ zh:
   webhook_secret_info_html: If provided, Redmine will use this to create a hash signature
     that is sent with each delivery as the value of the X-Redmine-Signature-256 header.
   setting_webhooks_enabled: Enable webhooks
+  setting_feishu_task_sync_enabled: 启用飞书任务同步
+  setting_feishu_app_id: 飞书应用 App ID
+  setting_feishu_app_secret: 飞书应用 App Secret
+  setting_feishu_api_base: 飞书开放平台地址
+  setting_feishu_default_open_id: 默认飞书用户 open_id（可多个）
+  text_feishu_task_sync_info: 开启后，已启用「飞书任务同步」模块的项目中的公开问题会在创建、更新、删除时同步到飞书任务。
+  text_feishu_default_open_id_info: 这些用户会作为飞书任务成员加入（多个用逗号、空格或换行分隔）。当指派人没有可匹配的飞书邮箱时也用这份列表。可在飞书开放平台「API 调试台」查询 open_id（形如 ou_ 开头）。
   label_integrations: Integrations
   label_alert_note: Note
   label_alert_tip: Tip

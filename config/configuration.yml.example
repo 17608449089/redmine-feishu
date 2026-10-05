@@ -269,6 +269,13 @@ default:
   # Default: 102400 (100 kilobytes)
   #markdownized_preview_max_output_size: 102400
 
+  # Feishu (Lark) task sync credentials. When set, these override
+  # Administration > Settings > Integrations.
+  # feishu:
+  #   app_id: cli_xxx
+  #   app_secret: xxx
+  #   api_base: https://open.feishu.cn
+
 # specific configuration options for production environment
 # that overrides the default ones
 production:

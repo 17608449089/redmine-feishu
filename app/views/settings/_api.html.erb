@@ -8,5 +8,10 @@
 <p><%= setting_check_box :webhooks_enabled %></p>
 </div>
 
+<fieldset class="box tabular settings">
+  <legend><%= l(:project_module_feishu_task_sync) %></legend>
+  <%= render :partial => 'settings/feishu' %>
+</fieldset>
+
 <%= submit_tag l(:button_save) %>
 <% end %>

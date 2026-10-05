@@ -62,6 +62,7 @@ class Issue < ApplicationRecord
   acts_as_mentionable :attributes => ['description']
   acts_as_webhookable
   include Issue::Webhookable
+  include Issue::FeishuSyncable
 
   DONE_RATIO_OPTIONS = %w(issue_field issue_status)
 

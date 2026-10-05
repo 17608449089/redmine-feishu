@@ -1,5 +1,119 @@
-= Redmine
+= Redmine（飞书任务同步版）
 
-Redmine is a flexible project management web application written using Ruby on Rails framework.
+本仓库基于 {Redmine}[https://www.redmine.org] 核心，增加 *Redmine Issue → 飞书任务* 单向同步，并提供与官方 <code>redmine:latest</code> 兼容的 SQLite Docker 镜像。飞书侧改动不会回写 Redmine。
 
-More details can be found in the doc directory or on the official website https://www.redmine.org
+官方文档仍见 <code>doc/</code> 与 https://www.redmine.org 。飞书与镜像细节见 <code>doc/feishu-task-sync.md</code>。
+
+== 同步行为
+
+公开问题在「全局开关 + 项目模块」都开启时才会同步：
+
+* 新建问题 → 创建飞书任务
+* 改标题、描述、状态、日期、指派人 → 更新飞书任务
+* 关闭 → 任务标记完成；重新打开 → 取消完成
+* 删除问题，或改为私有 → 删除飞书任务
+* 私有问题不同步
+
+任务标题形如：<code>#35 [进行中] 标题</code>。正文第一行是状态，后面是问题描述。开始/截止日期会一并写入。
+
+成员：
+
+1. 指派人邮箱能匹配到飞书用户时，加入该用户
+2. 后台填写的默认 <code>open_id</code>（可多个）也会加入，否则应用创建的任务在飞书里往往看不到
+
+已有问题不会批量补同步，只有保存/更新之后才会写入飞书。
+
+== 飞书应用
+
+在 {飞书开放平台}[https://open.feishu.cn/] 创建企业自建应用并发布：
+
+* <code>task:task:write</code>
+* <code>contact:user.id:readonly</code>（用邮箱查 open_id；没有邮箱则靠默认 open_id）
+
+open_id 在开放平台 API 调试台查询，形如 <code>ou_</code> 开头。
+
+== 后台配置（正式环境必须单独配）
+
+本地配过的开关 *不会* 出现在生产库里。管理员登录正式站点后：
+
+1. *管理 → 设置 → 集成*：勾选「启用飞书任务同步」；填写 App ID、App Secret；默认 open_id 可多个（逗号、空格或换行分隔）
+2. 每个要同步的项目：*设置 → 模块 → 勾选「飞书任务同步」→ 保存*
+
+只开全局、不勾项目模块时，日志为：
+
+  Feishu sync skipped ... global=true module=false
+
+== Docker（替换官方镜像、保留原数据）
+
+镜像名 <code>redmine-feishu:latest</code>，架构必须是 *linux/amd64*（在 Apple Silicon 上构建时 compose 已指定 platform）。
+
+官方 <code>redmine:latest</code> *不读取* <code>REDMINE_DB_SQLITE</code>。真正的库文件一直是：
+
+  /usr/src/redmine/sqlite/redmine.db
+
+本镜像与之相同。若误连 <code>redmine.sqlite3</code> 会看到空站点，旧数据仍在 <code>redmine.db</code>。换镜像时 *不要改* volume 名、挂载路径和 <code>REDMINE_SECRET_KEY_BASE</code>，也不要 <code>docker compose down -v</code>。
+
+生产 compose 只需把 <code>image</code> 换成 <code>redmine-feishu:latest</code>：
+
+  services:
+    redmine:
+      image: redmine-feishu:latest
+      container_name: redmine-app
+      restart: always
+      ports:
+        - "12323:3000"
+      environment:
+        REDMINE_DB_SQLITE: redmine.sqlite3   # 官方也不读，可保留
+        REDMINE_SECRET_KEY_BASE: <与原来相同>
+      volumes:
+        - redmine_sqlite_data:/usr/src/redmine/sqlite
+        - redmine_files_data:/usr/src/redmine/files
+
+  volumes:
+    redmine_sqlite_data:
+    redmine_files_data:
+
+  docker load < redmine-feishu.tar.gz
+  docker compose up -d
+
+启动时自动迁移，只新增飞书映射表，不清空用户和 Issue。容器内 Active Job 使用 *inline*，同步在请求内执行，无需单独 worker。
+
+可选环境变量（写入 <code>configuration.yml</code>，优先于后台设置）：<code>FEISHU_APP_ID</code>、<code>FEISHU_APP_SECRET</code>、<code>FEISHU_API_BASE</code>。
+
+本机构建：
+
+  docker compose build
+  docker save redmine-feishu:latest | gzip > redmine-feishu.tar.gz
+
+== 本次改动摘要
+
+=== 飞书同步
+
+* <code>lib/redmine/feishu.rb</code>、<code>lib/redmine/feishu/client.rb</code>、<code>lib/redmine/feishu/task_sync.rb</code>
+* <code>app/jobs/feishu_task_sync_job.rb</code>、<code>app/models/concerns/issue/feishu_syncable.rb</code>
+* <code>app/models/feishu_task_mapping.rb</code>、<code>app/models/feishu_user_mapping.rb</code>
+* 迁移：<code>db/migrate/20261005040000_create_feishu_sync_tables.rb</code>、<code>db/migrate/20261005073000_widen_feishu_assignee_open_id.rb</code>
+* 设置与文案：<code>config/settings.yml</code>、<code>config/locales/en.yml</code>、<code>config/locales/zh.yml</code>
+* 界面：<code>app/views/settings/_feishu.html.erb</code>、<code>app/views/settings/_api.html.erb</code>
+* 权限/模块：<code>lib/redmine/preparation.rb</code>；Issue 回调：<code>app/models/issue.rb</code>
+
+=== Docker
+
+* <code>Dockerfile</code>、<code>docker-compose.yml</code>、<code>.dockerignore</code>
+* <code>docker/entrypoint.sh</code>、<code>docker/database.yml</code>、<code>docker/Gemfile.local</code>
+* <code>config/puma.rb</code>
+
+=== 测试
+
+* <code>test/unit/lib/redmine/feishu/task_sync_test.rb</code>
+* <code>test/unit/jobs/feishu_task_sync_job_test.rb</code>
+
+== 排查
+
+  docker logs -f redmine-app
+
+* <code>global=false</code>：未开全局开关
+* <code>module=false</code>：该项目未勾选「飞书任务同步」
+* 日志成功但飞书看不到：默认 open_id 未填/填错，或应用权限未发布
+* 换镜像后像空站：连错了 <code>redmine.sqlite3</code>，或 volume / <code>REDMINE_SECRET_KEY_BASE</code> 被改掉
+* 同步失败只写日志，不阻断保存问题

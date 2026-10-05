@@ -513,6 +513,13 @@ en:
   setting_non_working_week_days: Non-working days
   setting_jsonp_enabled: Enable JSONP support
   setting_webhooks_enabled: Enable webhooks
+  setting_feishu_task_sync_enabled: Enable Feishu task sync
+  setting_feishu_app_id: Feishu app ID
+  setting_feishu_app_secret: Feishu app secret
+  setting_feishu_api_base: Feishu API base URL
+  setting_feishu_default_open_id: Default Feishu open_id list
+  text_feishu_task_sync_info: When enabled, public issues in projects that have the Feishu task sync module turned on are created, updated, and deleted as Feishu tasks.
+  text_feishu_default_open_id_info: These users are always added as Feishu task members (comma, space, or newline separated). Also used when the Redmine assignee has no matching Feishu email. Get open_id from the Feishu Open Platform API explorer (starts with ou_).
   setting_default_projects_tracker_ids: Default trackers for new projects
   setting_mail_handler_excluded_filenames: Exclude attachments by name
   setting_force_default_language_for_anonymous: Force default language for anonymous users
@@ -621,6 +628,7 @@ en:
   permission_search_project: Search projects
   permission_view_members: View project members
   permission_use_webhooks: Use webhooks
+  permission_sync_issues_to_feishu: Sync issues to Feishu tasks
 
 
   project_module_issue_tracking: Issue tracking
@@ -633,6 +641,7 @@ en:
   project_module_boards: Forums
   project_module_calendar: Calendar
   project_module_gantt: Gantt
+  project_module_feishu_task_sync: Feishu task sync
 
   label_user: User
   label_user_plural: Users

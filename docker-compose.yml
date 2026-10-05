@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  redmine:
+    platform: linux/amd64
+    build: .
+    image: redmine-feishu:latest
+    container_name: redmine-app
+    restart: always
+    ports:
+      - "12323:3000"
+    environment:
+      # Official redmine:latest ignores this. Database file is always sqlite/redmine.db.
+      REDMINE_DB_SQLITE: redmine.sqlite3
+      REDMINE_SECRET_KEY_BASE: AFewfwvergwkpko234
+    volumes:
+      - redmine_sqlite_data:/usr/src/redmine/sqlite
+      - redmine_files_data:/usr/src/redmine/files
+
+volumes:
+  redmine_sqlite_data:
+  redmine_files_data:

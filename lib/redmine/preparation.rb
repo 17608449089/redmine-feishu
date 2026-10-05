@@ -166,6 +166,10 @@ module Redmine
         map.project_module :gantt do |map|
           map.permission :view_gantt, {:gantts => [:show, :update]}, :read => true
         end
+
+        map.project_module :feishu_task_sync do |map|
+          map.permission :sync_issues_to_feishu, {}, :read => true
+        end
       end
 
       MenuManager.map :top_menu do |menu|

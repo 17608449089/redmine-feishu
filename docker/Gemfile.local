@@ -1,0 +1,3 @@
+# Gems required to run Redmine in Docker (production).
+# Must match the requirement in the main Gemfile (test group) so Bundler can parse both.
+gem "puma"

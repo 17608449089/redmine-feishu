@@ -1,0 +1,10 @@
+# Official redmine:latest ignores REDMINE_DB_SQLITE.
+# It always uses sqlite/redmine.db relative to /usr/src/redmine (the named volume).
+production:
+  adapter: sqlite3
+  host: localhost
+  username: redmine
+  database: sqlite/redmine.db
+  encoding: utf8
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS", 5) %>
+  timeout: 5000
