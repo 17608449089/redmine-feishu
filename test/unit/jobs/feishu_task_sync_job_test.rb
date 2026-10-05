@@ -62,6 +62,22 @@ class FeishuTaskSyncJobTest < ActiveJob::TestCase
     end
   end
 
+  def test_issue_title_update_enqueues_job_when_enabled
+    enable_sync!
+    issue = Issue.generate!(:subject => 'Old title')
+    assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['update', issue.id]) do
+      issue.update!(:subject => 'New title')
+    end
+  end
+
+  def test_issue_date_and_title_update_enqueues_job_when_enabled
+    enable_sync!
+    issue = Issue.generate!(:subject => 'Old', :start_date => Date.today, :due_date => Date.today + 1)
+    assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['update', issue.id]) do
+      issue.update!(:subject => 'New', :due_date => Date.today + 3)
+    end
+  end
+
   def test_issue_destroy_enqueues_job_with_task_guid
     enable_sync!
     Redmine::Feishu::TaskSync.any_instance.stubs(:sync_destroy)

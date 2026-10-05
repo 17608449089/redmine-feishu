@@ -109,19 +109,16 @@ module Redmine
           :summary => summary_for(issue),
           :description => description_for(issue)
         }
-        fields = %w(summary description origin)
-        task[:origin] = origin_for(issue)
+        # Origin is create-only. Empty start/due must be cleared by omitting the
+        # value (not timestamp 0), otherwise Feishu rejects the whole patch.
+        fields = %w(summary description)
         start_due = start_and_due(issue)
         if start_due.key?(:start)
           task[:start] = start_due[:start]
-        else
-          task[:start] = {:timestamp => '0'}
         end
         fields << 'start'
         if start_due.key?(:due)
           task[:due] = start_due[:due]
-        else
-          task[:due] = {:timestamp => '0'}
         end
         fields << 'due'
         # Feishu rejects setting a new non-zero completed_at on an already completed task.

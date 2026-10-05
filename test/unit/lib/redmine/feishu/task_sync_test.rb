@@ -214,6 +214,7 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     assert_equal 'guid-existing', patch[:guid]
     assert_includes patch[:fields], 'completed_at'
     assert_includes patch[:fields], 'summary'
+    assert_not_includes patch[:fields], 'origin'
     assert_match(/\A\d+\z/, patch[:task][:completed_at])
     assert_not_equal '0', patch[:task][:completed_at]
     assert_equal "##{issue.id} [#{issue.status.name}] Open", patch[:task][:summary]
@@ -260,10 +261,34 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     patch = @client.patched.first
     assert_includes patch[:fields], 'summary'
     assert_includes patch[:fields], 'description'
+    assert_includes patch[:fields], 'start'
+    assert_includes patch[:fields], 'due'
+    assert_not_includes patch[:fields], 'origin'
     assert_not_includes patch[:fields], 'completed_at'
+    assert_nil patch[:task][:start]
+    assert_nil patch[:task][:due]
     assert_equal "##{issue.id} [Assigned] Work", patch[:task][:summary]
     assert_includes patch[:task][:description], 'Status: Assigned'
     assert_includes patch[:task][:description], 'Body'
+  end
+
+  def test_sync_patches_dates_and_title
+    enable_sync!
+    issue = Issue.generate!(:subject => 'Plan', :start_date => Date.new(2026, 10, 1), :due_date => Date.new(2026, 10, 5))
+    FeishuTaskMapping.create!(:issue => issue, :task_guid => 'guid-dates', :task_completed => false)
+    issue.subject = 'Plan renamed'
+    issue.due_date = Date.new(2026, 10, 8)
+    issue.save!
+
+    @sync.sync(issue.id)
+
+    patch = @client.patched.first
+    assert_equal "##{issue.id} [#{issue.status.name}] Plan renamed", patch[:task][:summary]
+    assert_equal({:timestamp => (Time.utc(2026, 10, 1).to_i * 1000).to_s, :is_all_day => true}, patch[:task][:start])
+    assert_equal({:timestamp => (Time.utc(2026, 10, 8).to_i * 1000).to_s, :is_all_day => true}, patch[:task][:due])
+    assert_includes patch[:fields], 'summary'
+    assert_includes patch[:fields], 'start'
+    assert_includes patch[:fields], 'due'
   end
 
   def test_sync_updates_assignee_via_member_apis

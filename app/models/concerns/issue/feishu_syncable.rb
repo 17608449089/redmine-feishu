@@ -10,29 +10,36 @@ module Issue::FeishuSyncable
     # Capture task_guid before dependent: :delete removes the mapping row.
     before_destroy :store_feishu_task_guid_for_sync, :prepend => true
     has_one :feishu_task_mapping, :dependent => :delete
-    after_create_commit :enqueue_feishu_task_sync_create
-    after_update_commit :enqueue_feishu_task_sync_update
+    after_save_commit :enqueue_feishu_task_sync_save
     after_destroy_commit :enqueue_feishu_task_sync_destroy
   end
 
   private
 
-  def enqueue_feishu_task_sync_create
-    unless Redmine::Feishu::TaskSync.should_enqueue?(self)
-      log_feishu_sync_skip('create')
-      return
+  def enqueue_feishu_task_sync_save
+    if previously_new_record?
+      enqueue_feishu_task_sync_create
+    else
+      enqueue_feishu_task_sync_update
     end
+  end
 
-    FeishuTaskSyncJob.perform_later('create', id)
+  def enqueue_feishu_task_sync_create
+    enqueue_feishu_task_sync('create')
   end
 
   def enqueue_feishu_task_sync_update
+    enqueue_feishu_task_sync('update')
+  end
+
+  def enqueue_feishu_task_sync(action)
     unless Redmine::Feishu::TaskSync.should_enqueue?(self)
-      log_feishu_sync_skip('update')
+      log_feishu_sync_skip(action)
       return
     end
 
-    FeishuTaskSyncJob.perform_later('update', id)
+    Rails.logger.info {"Feishu sync enqueued action=#{action} issue=#{id}"}
+    FeishuTaskSyncJob.perform_later(action, id)
   end
 
   def store_feishu_task_guid_for_sync
