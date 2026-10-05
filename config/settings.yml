@@ -390,3 +390,5 @@ feishu_api_base:
   default: https://open.feishu.cn
 feishu_default_open_id:
   default: ''
+feishu_issue_base_url:
+  default: ''

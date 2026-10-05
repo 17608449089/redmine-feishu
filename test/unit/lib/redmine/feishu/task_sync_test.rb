@@ -106,6 +106,7 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     payload = @client.created.first
     assert_equal "##{issue.id} [#{issue.status.name}] Fix login", payload[:summary]
     assert_includes payload[:description], "Status: #{issue.status.name}"
+    assert_includes payload[:description], "Author: #{issue.author.name}"
     assert_includes payload[:description], 'Details'
     assert_equal '0', payload[:completed_at]
     assert_equal 'redmine-issue-' + issue.id.to_s, payload[:client_token]
@@ -122,6 +123,31 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     assert_equal 'task-guid-1', mapping.task_guid
     assert_equal 'ou_jsmith', mapping.assignee_open_id
     assert_equal 'ou_jsmith', FeishuUserMapping.find_by(:user_id => 2).open_id
+  end
+
+  def test_sync_create_adds_author_as_member
+    enable_sync!
+    @client = FakeClient.new(:open_ids => {
+      'jsmith@somenet.foo' => 'ou_jsmith',
+      'dlopper@somenet.foo' => 'ou_dlopper'
+    })
+    @sync = Redmine::Feishu::TaskSync.new(:client => @client)
+    issue = Issue.generate!(:author_id => 3, :assigned_to_id => 2)
+
+    @sync.sync(issue.id)
+
+    assert_equal ['ou_dlopper', 'ou_jsmith'], @client.created.first[:members].map {|m| m[:id]}
+  end
+
+  def test_sync_origin_uses_configured_base_url
+    enable_sync!
+    Setting.feishu_issue_base_url = 'http://118.178.179.139:12323'
+    issue = Issue.generate!
+
+    @sync.sync(issue.id)
+
+    assert_equal "http://118.178.179.139:12323/issues/#{issue.id}",
+                 @client.created.first[:origin][:href][:url]
   end
 
   def test_sync_create_omits_members_when_email_not_mapped

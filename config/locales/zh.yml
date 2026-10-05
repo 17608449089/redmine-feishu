@@ -1472,8 +1472,10 @@ zh:
   setting_feishu_app_secret: 飞书应用 App Secret
   setting_feishu_api_base: 飞书开放平台地址
   setting_feishu_default_open_id: 默认飞书用户 open_id（可多个）
+  setting_feishu_issue_base_url: 飞书任务中的 Redmine 访问地址
   text_feishu_task_sync_info: 开启后，已启用「飞书任务同步」模块的项目中的公开问题会在创建、更新、删除时同步到飞书任务。
   text_feishu_default_open_id_info: 这些用户会作为飞书任务成员加入（多个用逗号、空格或换行分隔）。当指派人没有可匹配的飞书邮箱时也用这份列表。可在飞书开放平台「API 调试台」查询 open_id（形如 ou_ 开头）。
+  text_feishu_issue_base_url_info: 飞书任务里跳转回 Redmine 的地址，例如 http://118.178.179.139:12323（不要末尾斜杠）。留空则使用「管理 → 设置 → 一般」里的主机名。
   label_integrations: Integrations
   label_alert_note: Note
   label_alert_tip: Tip

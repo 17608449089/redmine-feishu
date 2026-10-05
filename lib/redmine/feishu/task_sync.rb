@@ -109,7 +109,8 @@ module Redmine
           :summary => summary_for(issue),
           :description => description_for(issue)
         }
-        fields = %w(summary description)
+        fields = %w(summary description origin)
+        task[:origin] = origin_for(issue)
         start_due = start_and_due(issue)
         if start_due.key?(:start)
           task[:start] = start_due[:start]
@@ -147,6 +148,8 @@ module Redmine
 
       def member_open_ids_for(issue)
         ids = []
+        author = resolve_open_id(issue.author)
+        ids << author if author.present?
         assignee = resolve_open_id(issue.assigned_to)
         ids << assignee if assignee.present?
         ids.concat(default_open_ids)
@@ -196,7 +199,10 @@ module Redmine
       end
 
       def description_for(issue)
-        lines = ["#{::I18n.t(:field_status)}: #{issue.status&.name}"]
+        lines = [
+          "#{::I18n.t(:field_status)}: #{issue.status&.name}",
+          "#{::I18n.t(:field_author)}: #{issue.author&.name}"
+        ]
         body = issue.description.to_s.strip
         lines << '' << body if body.present?
         truncate_text(lines.join("\n"))
@@ -221,6 +227,11 @@ module Redmine
       end
 
       def issue_url(issue)
+        base = Setting.feishu_issue_base_url.to_s.strip.presence
+        if base.present?
+          return "#{base.chomp('/')}/issues/#{issue.id}"
+        end
+
         Rails.application.routes.url_helpers.issue_url(issue, Mailer.default_url_options)
       rescue ArgumentError, StandardError
         nil
