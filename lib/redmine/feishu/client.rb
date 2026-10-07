@@ -12,7 +12,12 @@ module Redmine
     class Client
       TOKEN_SKEW = 60
       HTTP_TIMEOUT = 15
-      HTTP_OPEN_TIMEOUT = 5
+      HTTP_OPEN_TIMEOUT = 10
+      MAX_ATTEMPTS = 3
+      RETRIABLE_ERRORS = [
+        Net::OpenTimeout, Net::ReadTimeout, SocketError, EOFError,
+        Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ETIMEDOUT
+      ].freeze
 
       class << self
         def reset_token!
@@ -34,6 +39,16 @@ module Redmine
       def create_task(payload)
         data = request(:post, '/open-apis/task/v2/tasks', payload: payload, query: {user_id_type: 'open_id'})
         data['task'] || data
+      end
+
+      def create_subtask(parent_guid, payload)
+        data = request(
+          :post,
+          "/open-apis/task/v2/tasks/#{parent_guid}/subtasks",
+          payload: payload,
+          query: {user_id_type: 'open_id'}
+        )
+        data['subtask'] || data
       end
 
       def patch_task(task_guid, task, update_fields)
@@ -63,6 +78,66 @@ module Redmine
         request(
           :post,
           "/open-apis/task/v2/tasks/#{task_guid}/remove_members",
+          payload: {members: members},
+          query: {user_id_type: 'open_id'}
+        )
+      end
+
+      # Idempotent: already-in-list returns success.
+      def add_tasklist(task_guid, tasklist_guid)
+        request(
+          :post,
+          "/open-apis/task/v2/tasks/#{task_guid}/add_tasklist",
+          payload: {tasklist_guid: tasklist_guid}
+        )
+      end
+
+      def create_tasklist(payload)
+        data = request(
+          :post,
+          '/open-apis/task/v2/tasklists',
+          payload: payload,
+          query: {user_id_type: 'open_id'}
+        )
+        data['tasklist'] || data
+      end
+
+      def get_tasklist(tasklist_guid)
+        data = request(
+          :get,
+          "/open-apis/task/v2/tasklists/#{tasklist_guid}",
+          query: {user_id_type: 'open_id'}
+        )
+        data['tasklist'] || data
+      end
+
+      def patch_tasklist(tasklist_guid, tasklist, update_fields)
+        data = request(
+          :patch,
+          "/open-apis/task/v2/tasklists/#{tasklist_guid}",
+          payload: {tasklist: tasklist, update_fields: update_fields},
+          query: {user_id_type: 'open_id'}
+        )
+        data['tasklist'] || data
+      end
+
+      def delete_tasklist(tasklist_guid)
+        request(:delete, "/open-apis/task/v2/tasklists/#{tasklist_guid}")
+      end
+
+      def add_tasklist_members(tasklist_guid, members)
+        request(
+          :post,
+          "/open-apis/task/v2/tasklists/#{tasklist_guid}/add_members",
+          payload: {members: members},
+          query: {user_id_type: 'open_id'}
+        )
+      end
+
+      def remove_tasklist_members(tasklist_guid, members)
+        request(
+          :post,
+          "/open-apis/task/v2/tasklists/#{tasklist_guid}/remove_members",
           payload: {members: members},
           query: {user_id_type: 'open_id'}
         )
@@ -148,12 +223,34 @@ module Redmine
         req['Authorization'] = "Bearer #{tenant_access_token}" if authenticate
         req.body = JSON.generate(payload) if payload
 
-        response = http.request(req)
+        response = with_retries(method, path) {http.request(req)}
         parse_response(response)
       rescue Error
         raise
       rescue StandardError => e
-        raise Error, "#{method.upcase} #{path} failed: #{e.message}"
+        raise Error, "#{method.upcase} #{path} failed: #{e.class}: #{e.message}"
+      end
+
+      # Task creation uses client_token, and patch/member calls are idempotent,
+      # so transient network failures are safe to retry.
+      def with_retries(method, path)
+        attempt = 0
+        begin
+          attempt += 1
+          yield
+        rescue *RETRIABLE_ERRORS => e
+          raise if attempt >= MAX_ATTEMPTS
+
+          Rails.logger.warn do
+            "Feishu #{method.upcase} #{path} attempt #{attempt} failed: #{e.class}, retrying"
+          end
+          sleep(retry_delay(attempt))
+          retry
+        end
+      end
+
+      def retry_delay(attempt)
+        attempt
       end
 
       def request_class(method)
@@ -184,7 +281,7 @@ module Redmine
 
         code = json['code']
         if code && code != 0
-          raise Error, "Feishu API error #{code}: #{json['msg']}"
+          raise Error.new("Feishu API error #{code}: #{json['msg']}", code: code)
         end
         unless response.is_a?(Net::HTTPSuccess)
           raise Error, "Feishu HTTP #{response.code}: #{json['msg'] || body.truncate(200)}"

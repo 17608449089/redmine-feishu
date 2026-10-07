@@ -67,30 +67,44 @@ compose 示例（端口、密钥、volume 按你现网填写）：
 1. 打开 *管理 → 设置 → 集成*
 2. 勾选「启用飞书任务同步」
 3. 填写 App ID、App Secret（若没用环境变量）
-4. 「默认飞书用户 open_id」填一个或多个，逗号、空格或换行均可，例如：
+4. 「抄送人飞书 open_id」填一个或多个，逗号、空格或换行均可。这些人会作为 *关注人* 加入每个飞书任务（包括项目任务），例如：
 
      ou_aaa
      ou_bbb, ou_ccc
 
-5. 填写「飞书任务中的 Redmine 访问地址」，例如 <code>http://118.178.179.139:12323</code>（不要末尾斜杠）。不要用 <code>http://localhost:3000</code>，否则飞书里点不开。
-6. 保存
-7. 打开要同步的 *项目 → 设置 → 模块*
-8. 勾选「飞书任务同步」并保存。每个项目都要勾，只开全局不够
+5. 「Redmine 飞书任务清单 GUID」：所有项目和问题都进 *同一个* 飞书清单。留空会自动创建名为「Redmine」的清单并写回；也可填已有清单 GUID。应用需在飞书开放平台开通并 *发布* <code>task:tasklist:write</code>（缺权限时任务仍会同步，只是进不了清单）
+6. 填写「飞书任务中的 Redmine 访问地址」，例如 <code>http://118.178.179.139:12323</code>（不要末尾斜杠）。不要用 <code>http://localhost:3000</code>，否则飞书里点不开。
+7. 保存
+8. 打开要同步的 *项目 → 设置 → 模块*
+9. 勾选「飞书任务同步」并保存。每个项目都要勾，只开全局不够
+10. 给每个人配负责人 open_id：*管理 → 用户 → 编辑某人*，填「飞书 open_id」并保存。问题指派给这个人时，他就是飞书任务的 *负责人*。留空则按邮箱自动查找（需要 <code>contact:user.id:readonly</code> 权限）
 
 === 4. 日常操作
 
+飞书里用 *一个* 任务清单（默认名「Redmine」）装所有内容，结构和 Redmine 一致：
+
+  清单「Redmine」
+    [项目] 父项目              ← 每个项目一个父任务
+      [项目] 子项目            ← 子项目挂在父项目任务下
+        #35 [进行中] 问题标题  ← 项目里的问题是它的子任务
+          #36 [新建] 子问题    ← 有父问题的，挂在父问题的任务下
+
+父项目没勾「飞书任务同步」时，子项目会挂到更上一层已勾选的项目下；都没勾就是清单里的顶层任务。
+
 在已勾选模块的项目里：
 
-* 新建问题 → 飞书出现对应任务
+* 新建问题 → 在项目任务（或父问题任务）下出现子任务；项目任务在第一个问题同步时自动创建
 * 改标题、描述、状态、日期、指派人 → 飞书任务跟着改
 * 关闭问题 → 飞书任务完成；重新打开 → 取消完成
-* 删除问题，或改成私有 → 删除飞书任务
+* 删除问题，或改成私有 → 删除飞书任务（子问题一起删）
+* 把问题换到别的项目或别的父问题 → 飞书不支持换父任务，会删掉旧任务、在新位置重建（连同它的子任务）
+* 改项目名称/描述 → 项目任务跟着改；关闭或归档项目 → 项目任务完成（子项目一起）；重新打开 → 取消完成
+* 把项目换到别的父项目下 → 删掉这个项目的整棵飞书任务树（子项目、问题），在新父项目下重建
+* 删除项目 → 删除项目任务和所有子任务（包括子项目）
 
-飞书标题形如 <code>#35 [进行中] 标题</code>，正文第一行是状态，后面是描述。
+成员：问题的 *指派人* 是飞书 *负责人*；问题的 *作者* 和「抄送人飞书 open_id」里的人是 *关注人*。项目任务的 *负责人* 是项目的全部有效成员（增删项目成员会同步），「抄送人飞书 open_id」里的人是 *关注人*。创建共用清单时，全局抄送人会作为清单协作人。
 
-已有问题不会自动全部推过去，对旧问题 *再保存一次* 才会同步。私有问题不同步。
-
-指派人有飞书邮箱时会加为任务成员；无论是否匹配成功，默认 open_id 列表里的人都会加入。
+已有问题不会自动全部推过去，对旧问题 *再保存一次* 才会同步。以前同步过、还挂在顶层的旧任务，再保存一次会自动移到项目任务下面（旧任务上的飞书评论不会保留）。私有问题不同步。
 
 到飞书「任务 / 我的任务」查看。
 
@@ -114,7 +128,7 @@ compose 示例（端口、密钥、volume 按你现网填写）：
 
 == 改了哪些文件
 
-同步：<code>lib/redmine/feishu*</code>、<code>app/jobs/feishu_task_sync_job.rb</code>、<code>app/models/concerns/issue/feishu_syncable.rb</code>、mapping 模型与两次 db/migrate、设置/locale/集成页、<code>lib/redmine/preparation.rb</code>、<code>app/models/issue.rb</code>
+同步：<code>lib/redmine/feishu*</code>、<code>app/jobs/feishu_task_sync_job.rb</code>、<code>app/models/concerns/{issue,project,user}/</code>、mapping 模型与 db/migrate 下的飞书迁移、设置/locale/集成页、用户编辑表单、<code>lib/redmine/preparation.rb</code>、<code>app/models/{issue,project,user}.rb</code>
 
 Docker：<code>Dockerfile</code>、<code>docker-compose.yml</code>、<code>docker/</code>、<code>.dockerignore</code>、<code>config/puma.rb</code>
 

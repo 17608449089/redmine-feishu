@@ -15,6 +15,10 @@
     <p><%= f.text_field :lastname, :required => true %></p>
   <% end %>
   <p><%= f.text_field :mail, :required => true %></p>
+  <p>
+    <%= f.text_field :feishu_open_id, :size => 40 %>
+    <em class="info"><%= l(:text_feishu_user_open_id_info) %></em>
+  </p>
   <% unless @user.force_default_language? %>
   <p><%= f.select :language, lang_options_for_select %></p>
   <% end %>

@@ -25,6 +25,7 @@ class UserQuery < Query
     QueryColumn.new(:firstname, sortable: "#{User.table_name}.firstname"),
     QueryColumn.new(:lastname, sortable: "#{User.table_name}.lastname"),
     QueryColumn.new(:mail, sortable: "#{EmailAddress.table_name}.address"),
+    QueryColumn.new(:feishu_open_id),
     QueryColumn.new(:admin, sortable: "#{User.table_name}.admin"),
     QueryColumn.new(:created_on, :sortable => "#{User.table_name}.created_on"),
     QueryColumn.new(:updated_on, :sortable => "#{User.table_name}.updated_on"),
@@ -115,9 +116,9 @@ class UserQuery < Query
   def default_columns_names
     @default_columns_names ||=
       if !User.lastname_before_firstname?
-        [:login, :firstname, :lastname, :mail, :admin, :created_on, :last_login_on]
+        [:login, :firstname, :lastname, :mail, :feishu_open_id, :admin, :created_on, :last_login_on]
       else
-        [:login, :lastname, :firstname, :mail, :admin, :created_on, :last_login_on]
+        [:login, :lastname, :firstname, :mail, :feishu_open_id, :admin, :created_on, :last_login_on]
       end
   end
 
@@ -126,7 +127,7 @@ class UserQuery < Query
   end
 
   def base_scope
-    User.logged.where(statement).includes(:email_address)
+    User.logged.where(statement).includes(:email_address, :feishu_user_mapping)
   end
 
   def results_scope(options={})

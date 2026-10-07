@@ -22,6 +22,7 @@ require "digest/sha1"
 class User < Principal
   include Redmine::Ciphering
   include Redmine::SafeAttributes
+  include User::FeishuConfigurable
 
   # Different ways of displaying/sorting users
   # rubocop:disable-next Lint/InterpolationCheck

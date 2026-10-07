@@ -76,6 +76,7 @@ class Project < ApplicationRecord
   acts_as_event :title => proc {|o| "#{l(:label_project)}: #{o.name}"},
                 :url => proc {|o| {:controller => 'projects', :action => 'show', :id => o}},
                 :author => nil
+  include Project::FeishuSyncable
 
   validates_presence_of :name, :identifier
   validates_uniqueness_of :identifier, :if => proc {|p| p.identifier_changed?}, :case_sensitive => true
@@ -454,15 +455,17 @@ class Project < ApplicationRecord
   def unarchive
     new_status = ancestors.any?(&:closed?) ? STATUS_CLOSED : STATUS_ACTIVE
     self_and_ancestors.status(STATUS_ARCHIVED).update_all :status => new_status
-    reload
+    reload.tap {enqueue_feishu_project_sync_for_tree}
   end
 
   def close
-    self_and_descendants.status(STATUS_ACTIVE).update_all :status => STATUS_CLOSED
+    self_and_descendants.status(STATUS_ACTIVE).update_all(:status => STATUS_CLOSED).
+      tap {enqueue_feishu_project_sync_for_tree}
   end
 
   def reopen
-    self_and_descendants.status(STATUS_CLOSED).update_all :status => STATUS_ACTIVE
+    self_and_descendants.status(STATUS_CLOSED).update_all(:status => STATUS_ACTIVE).
+      tap {enqueue_feishu_project_sync_for_tree}
   end
 
   # Returns an array of projects the project can be moved to

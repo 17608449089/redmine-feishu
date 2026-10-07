@@ -40,6 +40,90 @@ class FeishuTaskSyncJobTest < ActiveJob::TestCase
     FeishuTaskSyncJob.perform_now('destroy', 12, 'guid-x')
   end
 
+  def test_project_actions_call_project_sync
+    Redmine::Feishu::TaskSync.any_instance.expects(:sync_project).with(1)
+    Redmine::Feishu::TaskSync.any_instance.expects(:sync_project_destroy).with(1, 'guid-p', nil)
+    FeishuTaskSyncJob.perform_now('project_update', 1)
+    FeishuTaskSyncJob.perform_now('project_destroy', 1, 'guid-p')
+  end
+
+  def test_project_close_enqueues_project_sync
+    enable_sync!
+    FeishuProjectMapping.create!(:project_id => 1, :task_guid => 'guid-p')
+    assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['project_update', 1]) do
+      Project.find(1).close
+    end
+  end
+
+  def test_enabled_project_update_enqueues_sync_without_mapping
+    enable_sync!
+    project = Project.find(1)
+    assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['project_update', 1]) do
+      project.update!(:name => 'Renamed')
+    end
+  end
+
+  def test_disabled_project_update_does_not_enqueue
+    Setting.feishu_task_sync_enabled = '1'
+    assert_no_enqueued_jobs :only => FeishuTaskSyncJob do
+      Project.find(2).update!(:name => 'Renamed')
+    end
+  end
+
+  def test_project_parent_change_enqueues_sync_for_mapped_subtree
+    enable_sync!
+    FeishuProjectMapping.create!(:project_id => 6, :task_guid => 'guid-6')
+    project = Project.find(5)
+    assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['project_update', 6]) do
+      project.parent_id = 2
+      project.save!
+    end
+  end
+
+  def test_project_destroy_enqueues_job_with_task_guid
+    enable_sync!
+    project = Project.generate!
+    FeishuProjectMapping.create!(:project => project, :task_guid => 'guid-pd')
+    assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['project_destroy', project.id, 'guid-pd']) do
+      project.destroy
+    end
+  end
+
+  def test_member_added_enqueues_project_sync
+    enable_sync!
+    user = User.generate!
+    assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['project_update', 1]) do
+      Member.create!(:project_id => 1, :principal => user, :role_ids => [1])
+    end
+  end
+
+  def test_member_removed_enqueues_project_sync
+    enable_sync!
+    member = Member.find_by(:project_id => 1, :user_id => 2)
+    assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['project_update', 1]) do
+      member.destroy
+    end
+  end
+
+  def test_member_change_in_disabled_project_does_not_enqueue
+    Setting.feishu_task_sync_enabled = '1'
+    assert_no_enqueued_jobs :only => FeishuTaskSyncJob do
+      Member.create!(:project_id => 2, :principal => User.generate!, :role_ids => [1])
+    end
+  end
+
+  def test_user_feishu_open_id_is_saved_and_cleared
+    user = User.find(2)
+    user.feishu_open_id = ' ou_manual '
+    user.save!
+    assert_equal 'ou_manual', FeishuUserMapping.find_by(:user_id => 2).open_id
+    assert_equal 'ou_manual', User.find(2).feishu_open_id
+
+    user.feishu_open_id = ''
+    user.save!
+    assert_nil FeishuUserMapping.find_by(:user_id => 2)
+  end
+
   def test_swallows_feishu_errors
     Redmine::Feishu::TaskSync.any_instance.stubs(:sync).raises(Redmine::Feishu::Error, 'boom')
     assert_nothing_raised do
