@@ -1477,8 +1477,8 @@ zh:
   field_feishu_open_id: 飞书 open_id
   text_feishu_user_open_id_info: 该用户被指派为问题负责人时，作为飞书任务的负责人（形如 ou_ 开头）。留空则按邮箱自动查找。
   text_feishu_task_sync_info: 开启后，所有同步的项目和问题都进入同一个飞书清单。每个项目是一个父任务，项目里的问题是子任务，有父问题的挂在父问题下。新建、修改、关闭、删除都会同步到飞书。
-  text_feishu_default_open_id_info: 这些用户会作为关注人（抄送）加入每个飞书任务，包括项目任务（多个用逗号、空格或换行分隔）。可在飞书开放平台「API 调试台」查询 open_id（形如 ou_ 开头）。
-  text_feishu_tasklist_guid_info: '所有项目任务和问题任务都放入这一个飞书清单。留空时会自动创建名为「Redmine」的清单并写回此处。也可填已有清单的 GUID。应用需开通并发布 task:tasklist:write；缺权限时任务照常同步，只是不会加入清单。清单内层级为：项目任务 → 问题 → 子问题。'
+  text_feishu_default_open_id_info: 这些用户会作为关注人（抄送）加入每个飞书问题任务（多个用逗号、空格或换行分隔）。可在飞书开放平台「API 调试台」查询 open_id（形如 ou_ 开头）。
+  text_feishu_tasklist_guid_info: '所有项目和问题都放入这一个飞书清单。留空时会自动创建名为「Redmine」的清单并写回此处。也可填已有清单的 GUID。应用需开通并发布 task:tasklist:write 与 task:section:write；缺权限时任务照常同步，只是不会加入清单/分组。清单内：每个项目是一个自定义分组，问题是分组里的任务，子问题是子任务。'
   text_feishu_issue_base_url_info: 飞书任务里跳转回 Redmine 的地址，例如 http://118.178.179.139:12323（不要末尾斜杠）。留空则使用「管理 → 设置 → 一般」里的主机名。
   label_integrations: Integrations
   label_alert_note: Note

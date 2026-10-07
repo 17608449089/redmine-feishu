@@ -12,15 +12,14 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
 
   class FakeClient
     attr_reader :created, :subtasks, :patched, :deleted, :added_members, :removed_members,
-                :added_tasklists, :created_tasklists, :patched_tasklists, :deleted_tasklists,
-                :added_tasklist_members, :removed_tasklist_members, :looked_up_emails
+                :added_tasklists, :created_tasklists, :created_sections, :patched_sections,
+                :deleted_sections, :looked_up_emails
 
     def initialize(open_ids: {}, missing: [], fail_patch: false, fail_tasklist: false)
       @open_ids = open_ids
       @missing = missing
       @fail_patch = fail_patch
       @fail_tasklist = fail_tasklist
-      @seq = 0
       @created = []
       @subtasks = []
       @patched = []
@@ -29,22 +28,22 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
       @removed_members = []
       @added_tasklists = []
       @created_tasklists = []
-      @patched_tasklists = []
-      @deleted_tasklists = []
-      @added_tasklist_members = []
-      @removed_tasklist_members = []
+      @created_sections = []
+      @patched_sections = []
+      @deleted_sections = []
       @tasklists = {}
+      @sections = {}
       @looked_up_emails = []
     end
 
     def create_task(payload)
       @created << payload
-      {'guid' => "project-guid-#{@created.size}"}
+      {'guid' => "task-guid-#{@created.size}"}
     end
 
     def create_subtask(parent_guid, payload)
       @subtasks << payload.merge(:parent => parent_guid)
-      {'guid' => "task-guid-#{@subtasks.size}"}
+      {'guid' => "subtask-guid-#{@subtasks.size}"}
     end
 
     def patch_task(guid, task, fields)
@@ -71,8 +70,10 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
       @removed_members << {:guid => guid, :members => members}
     end
 
-    def add_tasklist(guid, tasklist_guid)
-      @added_tasklists << {:guid => guid, :tasklist_guid => tasklist_guid}
+    def add_tasklist(guid, tasklist_guid, section_guid: nil)
+      entry = {:guid => guid, :tasklist_guid => tasklist_guid}
+      entry[:section_guid] = section_guid if section_guid.present?
+      @added_tasklists << entry
     end
 
     def create_tasklist(payload)
@@ -95,26 +96,40 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
       @tasklists[guid] || {'guid' => guid}
     end
 
-    def patch_tasklist(guid, tasklist, fields)
-      @patched_tasklists << {:guid => guid, :tasklist => tasklist, :fields => fields}
+    def create_section(payload)
+      if @fail_tasklist
+        raise Redmine::Feishu::Error, 'Access denied. task:section:write required'
+      end
+
+      @created_sections << payload
+      guid = "section-guid-#{@created_sections.size}"
+      @sections[guid] = payload
       {'guid' => guid}
     end
 
-    def delete_tasklist(guid)
+    def get_section(guid)
+      if @fail_tasklist
+        raise Redmine::Feishu::Error, 'Access denied. task:section:write required'
+      end
+      raise Redmine::Feishu::Error.new('not found', code: Redmine::Feishu::Error::NOT_FOUND) if @missing.include?(guid)
+
+      @sections[guid] || {'guid' => guid}
+    end
+
+    def patch_section(guid, section, fields)
+      raise Redmine::Feishu::Error.new('not found', code: Redmine::Feishu::Error::NOT_FOUND) if @missing.include?(guid)
+
+      @patched_sections << {:guid => guid, :section => section, :fields => fields}
+      {'guid' => guid}
+    end
+
+    def delete_section(guid)
       if @missing.include?(guid)
         raise Redmine::Feishu::Error.new('not found', code: Redmine::Feishu::Error::NOT_FOUND)
       end
 
-      @deleted_tasklists << guid
+      @deleted_sections << guid
       {}
-    end
-
-    def add_tasklist_members(guid, members)
-      @added_tasklist_members << {:guid => guid, :members => members}
-    end
-
-    def remove_tasklist_members(guid, members)
-      @removed_tasklist_members << {:guid => guid, :members => members}
     end
 
     def open_id_for_email(email)
@@ -138,11 +153,11 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     Setting.feishu_task_sync_enabled = '1'
   end
 
-  def map_project!(project = @project, guid = 'guid-project', **attrs)
-    FeishuProjectMapping.create!(attrs.merge(:project => project, :task_guid => guid))
+  def map_project!(project = @project, guid = 'guid-section', **attrs)
+    FeishuProjectMapping.create!(attrs.merge(:project => project, :section_guid => guid))
   end
 
-  def map_issue!(issue, guid, parent: 'guid-project', **attrs)
+  def map_issue!(issue, guid, parent: nil, **attrs)
     map_project! unless FeishuProjectMapping.exists?(:project_id => issue.project_id)
     FeishuTaskMapping.create!(attrs.merge(:issue => issue, :task_guid => guid, :parent_task_guid => parent))
   end
@@ -178,7 +193,7 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     assert_equal 0, FeishuTaskMapping.count
   end
 
-  def test_sync_creates_project_task_then_issue_subtask
+  def test_sync_creates_project_section_then_issue_task
     enable_sync!
     Setting.feishu_default_open_id = 'ou_cc'
     issue = Issue.generate!(:subject => 'Fix login', :description => 'Details',
@@ -187,39 +202,43 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
 
     @sync.sync(issue.id)
 
-    assert_equal 1, @client.created.size
-    project_payload = @client.created.first
-    assert_equal "[Project] #{@project.name}", project_payload[:summary]
-    assert_equal "redmine-project-#{@project.id}", project_payload[:client_token]
-    assert_equal ['assignee:ou_jsmith', 'follower:ou_cc'], roles(project_payload[:members])
-    assert_includes project_payload[:origin][:href][:url], "/projects/#{@project.identifier}"
-    project_mapping = FeishuProjectMapping.find_by(:project_id => @project.id)
-    assert_equal 'project-guid-1', project_mapping.task_guid
+    assert_equal 1, @client.created_tasklists.size
+    assert_equal 1, @client.created_sections.size
+    section = @client.created_sections.first
+    assert_equal @project.name, section[:name]
+    assert_equal 'tasklist', section[:resource_type]
+    assert_equal 'list-guid-1', section[:resource_id]
+    assert_equal 'section-guid-1', FeishuProjectMapping.find_by(:project_id => @project.id).section_guid
 
-    payload = @client.subtasks.first
-    assert_equal 'project-guid-1', payload[:parent]
+    assert_equal 1, @client.created.size
+    assert_empty @client.subtasks
+    payload = @client.created.first
     assert_equal "##{issue.id} [#{issue.status.name}] Fix login", payload[:summary]
     assert_includes payload[:description], "Author: #{issue.author.name}"
     assert_includes payload[:description], 'Details'
     assert_equal '0', payload[:completed_at]
     assert_equal (Time.utc(2024, 1, 2).to_i * 1000).to_s, payload[:start][:timestamp]
     assert_equal (Time.utc(2024, 1, 5).to_i * 1000).to_s, payload[:due][:timestamp]
+    assert_equal ['assignee:ou_jsmith', 'follower:ou_cc'], roles(payload[:members])
+    assert_equal [{:tasklist_guid => 'list-guid-1', :section_guid => 'section-guid-1'}], payload[:tasklists]
     assert_includes payload[:origin][:href][:url], "/issues/#{issue.id}"
 
     mapping = FeishuTaskMapping.find_by(:issue_id => issue.id)
     assert_equal 'task-guid-1', mapping.task_guid
-    assert_equal 'project-guid-1', mapping.parent_task_guid
+    assert_nil mapping.parent_task_guid
   end
 
-  def test_sync_reuses_existing_project_task
+  def test_sync_reuses_existing_project_section
     enable_sync!
+    Setting.feishu_tasklist_guid = 'shared-list'
+    @client.instance_variable_get(:@tasklists)['shared-list'] = {:name => 'Redmine'}
     map_project!
     issue = Issue.generate!
 
     @sync.sync(issue.id)
 
-    assert_empty @client.created
-    assert_equal 'guid-project', @client.subtasks.first[:parent]
+    assert_empty @client.created_sections
+    assert_equal 'guid-section', @client.created.first[:tasklists].first[:section_guid]
   end
 
   def test_assignee_is_feishu_assignee_and_global_ids_are_followers
@@ -231,7 +250,7 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     @sync.sync(issue.id)
 
     assert_equal ['assignee:ou_dlopper', 'follower:ou_jsmith', 'follower:ou_a', 'follower:ou_b'],
-                 roles(@client.subtasks.first[:members])
+                 roles(@client.created.first[:members])
     assert_equal 'assignee:ou_dlopper,follower:ou_jsmith,follower:ou_a,follower:ou_b',
                  FeishuTaskMapping.find_by(:issue_id => issue.id).assignee_open_id
   end
@@ -247,7 +266,7 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     @sync.sync(issue.id)
 
     assert_empty @client.looked_up_emails
-    assert_equal ['assignee:ou_manual'], roles(@client.subtasks.first[:members])
+    assert_equal ['assignee:ou_manual'], roles(@client.created.first[:members])
   end
 
   def test_global_ids_are_followers_without_assignee
@@ -259,7 +278,7 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
 
     @sync.sync(issue.id)
 
-    assert_equal ['follower:ou_a', 'follower:ou_b', 'follower:ou_c'], roles(@client.subtasks.first[:members])
+    assert_equal ['follower:ou_a', 'follower:ou_b', 'follower:ou_c'], roles(@client.created.first[:members])
   end
 
   def test_sync_origin_uses_configured_base_url
@@ -270,8 +289,6 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     @sync.sync(issue.id)
 
     assert_equal "http://118.178.179.139:12323/issues/#{issue.id}",
-                 @client.subtasks.first[:origin][:href][:url]
-    assert_equal "http://118.178.179.139:12323/projects/#{@project.identifier}",
                  @client.created.first[:origin][:href][:url]
   end
 
@@ -281,11 +298,10 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
 
     @sync.sync(issue.id)
 
-    assert_equal "Issue ##{issue.id}", @client.subtasks.first[:origin][:href][:title]
-    assert_equal "Project #{@project.identifier}", @client.created.first[:origin][:href][:title]
+    assert_equal "Issue ##{issue.id}", @client.created.first[:origin][:href][:title]
   end
 
-  def test_create_uses_one_shared_tasklist_for_project_and_issue
+  def test_create_uses_one_shared_tasklist_and_project_section
     enable_sync!
     issue = Issue.generate!
 
@@ -294,10 +310,10 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     assert_equal 1, @client.created_tasklists.size
     assert_equal 'Redmine', @client.created_tasklists.first[:name]
     assert_equal 'list-guid-1', Setting.feishu_tasklist_guid
-    assert_equal [{:tasklist_guid => 'list-guid-1'}], @client.created.first[:tasklists]
-    assert_equal [{:tasklist_guid => 'list-guid-1'}], @client.subtasks.first[:tasklists]
-    assert_includes @client.added_tasklists, {:guid => 'project-guid-1', :tasklist_guid => 'list-guid-1'}
-    assert_includes @client.added_tasklists, {:guid => 'task-guid-1', :tasklist_guid => 'list-guid-1'}
+    assert_equal [{:tasklist_guid => 'list-guid-1', :section_guid => 'section-guid-1'}],
+                 @client.created.first[:tasklists]
+    assert_includes @client.added_tasklists,
+                    {:guid => 'task-guid-1', :tasklist_guid => 'list-guid-1', :section_guid => 'section-guid-1'}
   end
 
   def test_create_reuses_configured_shared_tasklist
@@ -309,11 +325,11 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     @sync.sync(issue.id)
 
     assert_empty @client.created_tasklists
-    assert_equal [{:tasklist_guid => 'shared-list'}], @client.created.first[:tasklists]
-    assert_equal [{:tasklist_guid => 'shared-list'}], @client.subtasks.first[:tasklists]
+    assert_equal [{:tasklist_guid => 'shared-list', :section_guid => 'section-guid-1'}],
+                 @client.created.first[:tasklists]
   end
 
-  def test_update_adds_existing_task_to_shared_tasklist
+  def test_update_adds_existing_task_to_shared_tasklist_section
     enable_sync!
     Setting.feishu_tasklist_guid = 'shared-list'
     @client.instance_variable_get(:@tasklists)['shared-list'] = {:name => 'Redmine'}
@@ -322,7 +338,8 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
 
     @sync.sync(issue.id)
 
-    assert_includes @client.added_tasklists, {:guid => 'guid-existing', :tasklist_guid => 'shared-list'}
+    assert_includes @client.added_tasklists,
+                    {:guid => 'guid-existing', :tasklist_guid => 'shared-list', :section_guid => 'guid-section'}
   end
 
   def test_tasklist_permission_failure_does_not_block_issue_create
@@ -333,8 +350,8 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
 
     assert_nothing_raised {@sync.sync(issue.id)}
 
-    assert_equal 1, @client.subtasks.size
-    assert_nil @client.subtasks.first[:tasklists]
+    assert_equal 1, @client.created.size
+    assert_nil @client.created.first[:tasklists]
     assert_equal 'task-guid-1', FeishuTaskMapping.find_by(:issue_id => issue.id).task_guid
     assert_empty Setting.feishu_tasklist_guid.to_s
   end
@@ -360,19 +377,23 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
 
     @sync.sync(child.id)
 
-    assert_equal ['project-guid-1', 'task-guid-1'], @client.subtasks.pluck(:parent)
+    assert_equal 1, @client.created.size
+    assert_equal ['task-guid-1'], @client.subtasks.pluck(:parent)
     assert_equal 'task-guid-1', FeishuTaskMapping.find_by(:issue_id => parent.id).task_guid
+    assert_equal 'subtask-guid-1', FeishuTaskMapping.find_by(:issue_id => child.id).task_guid
     assert_equal 'task-guid-1', FeishuTaskMapping.find_by(:issue_id => child.id).parent_task_guid
   end
 
-  def test_private_parent_falls_back_to_project_task
+  def test_private_parent_falls_back_to_project_section
     enable_sync!
     parent = Issue.generate!(:is_private => true)
     child = Issue.generate!(:parent_issue_id => parent.id)
 
     @sync.sync(child.id)
 
-    assert_equal ['project-guid-1'], @client.subtasks.pluck(:parent)
+    assert_equal 1, @client.created.size
+    assert_empty @client.subtasks
+    assert_nil FeishuTaskMapping.find_by(:issue_id => child.id).parent_task_guid
   end
 
   def test_parent_change_recreates_task_and_descendants
@@ -385,21 +406,23 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     @sync.sync(issue.id)
 
     assert_equal ['guid-old', 'guid-old-child'].sort, @client.deleted.sort
-    assert_equal ['guid-project', 'task-guid-1'], @client.subtasks.pluck(:parent)
+    assert_equal 1, @client.created.size
+    assert_equal ['task-guid-1'], @client.subtasks.pluck(:parent)
     assert_equal 'task-guid-1', FeishuTaskMapping.find_by(:issue_id => issue.id).task_guid
-    assert_equal 'task-guid-2', FeishuTaskMapping.find_by(:issue_id => child.id).task_guid
+    assert_equal 'subtask-guid-1', FeishuTaskMapping.find_by(:issue_id => child.id).task_guid
     assert_equal 'task-guid-1', FeishuTaskMapping.find_by(:issue_id => child.id).parent_task_guid
   end
 
-  def test_legacy_top_level_task_is_moved_under_project
+  def test_legacy_project_parent_task_is_recreated_in_section
     enable_sync!
     issue = Issue.generate!
-    map_issue!(issue, 'guid-legacy', :parent => nil)
+    map_issue!(issue, 'guid-legacy', :parent => 'old-project-task')
 
     @sync.sync(issue.id)
 
     assert_equal ['guid-legacy'], @client.deleted
-    assert_equal ['guid-project'], @client.subtasks.pluck(:parent)
+    assert_equal 1, @client.created.size
+    assert_nil FeishuTaskMapping.find_by(:issue_id => issue.id).parent_task_guid
   end
 
   def test_sync_updates_existing_task_and_completed_at
@@ -411,7 +434,7 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     issue.save!
     @sync.sync(issue.id)
 
-    assert_empty @client.subtasks
+    assert_empty @client.created
     patch = @client.patched.first
     assert_equal 'guid-existing', patch[:guid]
     assert_includes patch[:fields], 'completed_at'
@@ -551,138 +574,75 @@ class Redmine::Feishu::TaskSyncTest < ActiveSupport::TestCase
     assert_nil FeishuTaskMapping.find_by(:issue_id => issue.id)
   end
 
-  def test_sync_project_creates_task_when_missing
+  def test_sync_project_creates_section_when_missing
     enable_sync!
+    Setting.feishu_tasklist_guid = 'shared-list'
+    @client.instance_variable_get(:@tasklists)['shared-list'] = {:name => 'Redmine'}
     subproject = Project.find(3)
     enable_sync!(subproject)
 
     @sync.sync_project(subproject.id)
 
-    assert_equal ["[Project] #{@project.name}"], @client.created.pluck(:summary)
-    assert_equal ['project-guid-1'], @client.subtasks.pluck(:parent)
-    assert_equal 'task-guid-1', FeishuProjectMapping.find_by(:project_id => 3).task_guid
-    assert_empty @client.patched
+    assert_equal 1, @client.created_sections.size
+    assert_equal 'eCookbook Subproject 1', @client.created_sections.first[:name]
+    assert_equal 'section-guid-1', FeishuProjectMapping.find_by(:project_id => 3).section_guid
+    assert_empty @client.created
+    assert_empty @client.patched_sections
   end
 
-  def test_sync_project_patches_name_and_completion
+  def test_sync_project_patches_section_name
     enable_sync!
-    map_project!(@project, 'guid-project', :task_completed => false)
-    @project.update_column(:name, 'Renamed')
-    @project.update_column(:status, Project::STATUS_CLOSED)
-
-    @sync.sync_project(@project.id)
-
-    patch = @client.patched.first
-    assert_equal 'guid-project', patch[:guid]
-    assert_equal '[Project] Renamed', patch[:task][:summary]
-    assert_includes patch[:fields], 'completed_at'
-    assert_not_equal '0', patch[:task][:completed_at]
-    assert FeishuProjectMapping.find_by(:project_id => @project.id).task_completed?
-  end
-
-  def test_sync_project_members_are_assignees
-    enable_sync!
-    Setting.feishu_default_open_id = 'ou_cc, ou_jsmith'
     Setting.feishu_tasklist_guid = 'shared-list'
     @client.instance_variable_get(:@tasklists)['shared-list'] = {:name => 'Redmine'}
-    FeishuUserMapping.create!(:user_id => 3, :open_id => 'ou_dlopper')
-    map_project!(@project, 'guid-project', :member_open_ids => 'assignee:ou_gone,follower:ou_cc')
+    map_project!(@project, 'guid-section')
+    @project.update_column(:name, 'Renamed')
 
     @sync.sync_project(@project.id)
 
-    assert_equal ['assignee:ou_gone'], roles(@client.removed_members.first[:members])
-    assert_equal ['assignee:ou_jsmith', 'assignee:ou_dlopper'],
-                 roles(@client.added_members.first[:members])
-    assert_equal 'assignee:ou_jsmith,assignee:ou_dlopper,follower:ou_cc',
-                 FeishuProjectMapping.find_by(:project_id => @project.id).member_open_ids
-    assert_includes @client.added_tasklists, {:guid => 'guid-project', :tasklist_guid => 'shared-list'}
+    patch = @client.patched_sections.first
+    assert_equal 'guid-section', patch[:guid]
+    assert_equal 'Renamed', patch[:section][:name]
+    assert_equal %w(name), patch[:fields]
   end
 
-  def test_sync_project_destroy_deletes_task_but_keeps_shared_tasklist
+  def test_sync_project_recreates_section_when_missing_remotely
+    enable_sync!
+    Setting.feishu_tasklist_guid = 'shared-list'
+    @client = FakeClient.new(:missing => ['stale-section'])
+    @client.instance_variable_get(:@tasklists)['shared-list'] = {:name => 'Redmine'}
+    @sync = Redmine::Feishu::TaskSync.new(:client => @client)
+    map_project!(@project, 'stale-section')
+
+    @sync.sync_project(@project.id)
+
+    assert_equal 'section-guid-1', FeishuProjectMapping.find_by(:project_id => @project.id).section_guid
+  end
+
+  def test_sync_project_destroy_deletes_section_but_keeps_shared_tasklist
     Setting.feishu_tasklist_guid = 'shared-list'
     map_project!(@project, 'guid-del')
 
     @sync.sync_project_destroy(@project.id, 'guid-del')
 
-    assert_equal ['guid-del'], @client.deleted
-    assert_empty @client.deleted_tasklists
+    assert_equal ['guid-del'], @client.deleted_sections
+    assert_empty @client.deleted
     assert_nil FeishuProjectMapping.find_by(:project_id => @project.id)
   end
 
-  def test_sync_project_reopen_clears_completion
+  def test_subproject_gets_its_own_section
     enable_sync!
-    map_project!(@project, 'guid-project', :task_completed => true)
-
-    @sync.sync_project(@project.id)
-
-    assert_equal '0', @client.patched.first[:task][:completed_at]
-  end
-
-  def test_subproject_task_is_subtask_of_parent_project_task
-    enable_sync!
+    Setting.feishu_tasklist_guid = 'shared-list'
+    @client.instance_variable_get(:@tasklists)['shared-list'] = {:name => 'Redmine'}
     subproject = Project.find(3)
     enable_sync!(subproject)
     issue = Issue.generate!(:project => subproject)
 
     @sync.sync(issue.id)
 
-    assert_equal 1, @client.created.size
-    assert_equal ['project-guid-1', 'task-guid-1'], @client.subtasks.pluck(:parent)
-    assert_equal '[Project] eCookbook Subproject 1', @client.subtasks.first[:summary]
-    mapping = FeishuProjectMapping.find_by(:project_id => 3)
-    assert_equal 'task-guid-1', mapping.task_guid
-    assert_equal 'project-guid-1', mapping.parent_task_guid
-    assert_equal 'task-guid-1', FeishuTaskMapping.find_by(:issue_id => issue.id).parent_task_guid
-  end
-
-  def test_subproject_skips_disabled_ancestor
-    enable_sync!
-    project6 = Project.find(6)
-    enable_sync!(project6)
-    issue = Issue.generate!(:project => project6)
-
-    @sync.sync(issue.id)
-
-    assert_not FeishuProjectMapping.exists?(:project_id => 5)
-    assert_equal 'project-guid-1', FeishuProjectMapping.find_by(:project_id => 6).parent_task_guid
-  end
-
-  def test_subproject_is_top_level_when_parent_not_synced
-    subproject = Project.find(3)
-    enable_sync!(subproject)
-    issue = Issue.generate!(:project => subproject)
-
-    @sync.sync(issue.id)
-
-    assert_equal ['[Project] eCookbook Subproject 1'], @client.created.pluck(:summary)
-    assert_nil FeishuProjectMapping.find_by(:project_id => 3).parent_task_guid
-  end
-
-  def test_sync_project_moves_subtree_when_parent_changes
-    enable_sync!
-    subproject = Project.find(3)
-    enable_sync!(subproject)
-    map_project!(@project, 'guid-p1')
-    map_project!(subproject, 'guid-p3')
-    issue = Issue.generate!(:project => subproject)
-    map_issue!(issue, 'guid-i', :parent => 'guid-p3')
-
-    @sync.sync_project(subproject.id)
-
-    assert_equal ['guid-i', 'guid-p3'], @client.deleted.sort
-    assert_equal ['guid-p1', 'task-guid-1'], @client.subtasks.pluck(:parent)
-    assert_equal 'guid-p1', FeishuProjectMapping.find_by(:project_id => 3).parent_task_guid
-    assert_equal 'task-guid-1', FeishuTaskMapping.find_by(:issue_id => issue.id).parent_task_guid
-    assert_empty @client.patched
-  end
-
-  def test_sync_project_destroy_deletes_remote_task
-    map_project!(@project, 'guid-project')
-
-    @sync.sync_project_destroy(@project.id, 'guid-project')
-
-    assert_equal ['guid-project'], @client.deleted
-    assert_nil FeishuProjectMapping.find_by(:project_id => @project.id)
+    assert_equal ['eCookbook Subproject 1'], @client.created_sections.pluck(:name)
+    assert_equal 'section-guid-1', FeishuProjectMapping.find_by(:project_id => 3).section_guid
+    assert_not FeishuProjectMapping.exists?(:project_id => 1)
+    assert_equal 'section-guid-1', @client.created.first[:tasklists].first[:section_guid]
   end
 
   def test_should_enqueue_when_enabled

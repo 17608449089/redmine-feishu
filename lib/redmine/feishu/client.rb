@@ -83,13 +83,49 @@ module Redmine
         )
       end
 
-      # Idempotent: already-in-list returns success.
-      def add_tasklist(task_guid, tasklist_guid)
+      # Idempotent: already-in-list returns success. section_guid places the task
+      # into a custom section of that tasklist.
+      def add_tasklist(task_guid, tasklist_guid, section_guid: nil)
+        payload = {tasklist_guid: tasklist_guid}
+        payload[:section_guid] = section_guid if section_guid.present?
         request(
           :post,
           "/open-apis/task/v2/tasks/#{task_guid}/add_tasklist",
-          payload: {tasklist_guid: tasklist_guid}
+          payload: payload
         )
+      end
+
+      def create_section(payload)
+        data = request(
+          :post,
+          '/open-apis/task/v2/sections',
+          payload: payload,
+          query: {user_id_type: 'open_id'}
+        )
+        data['section'] || data
+      end
+
+      def get_section(section_guid)
+        data = request(
+          :get,
+          "/open-apis/task/v2/sections/#{section_guid}",
+          query: {user_id_type: 'open_id'}
+        )
+        data['section'] || data
+      end
+
+      def patch_section(section_guid, section, update_fields)
+        data = request(
+          :patch,
+          "/open-apis/task/v2/sections/#{section_guid}",
+          payload: {section: section, update_fields: update_fields},
+          query: {user_id_type: 'open_id'}
+        )
+        data['section'] || data
+      end
+
+      def delete_section(section_guid)
+        request(:delete, "/open-apis/task/v2/sections/#{section_guid}")
       end
 
       def create_tasklist(payload)

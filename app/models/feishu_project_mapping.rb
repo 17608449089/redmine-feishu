@@ -7,5 +7,5 @@ class FeishuProjectMapping < ApplicationRecord
   belongs_to :project
 
   validates :project_id, :uniqueness => true
-  validates :task_guid, :presence => true
+  validates :section_guid, :presence => true
 end

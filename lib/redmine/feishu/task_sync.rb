@@ -5,9 +5,9 @@
 
 module Redmine
   module Feishu
-    # Each project is a Feishu task, nested under its nearest synced ancestor
-    # project; its issues are subtasks. An issue with a synced parent issue
-    # becomes a subtask of that parent's task instead.
+    # Shared Feishu tasklist "Redmine": each Redmine project is a custom section;
+    # issues are tasks in that section; child issues are Feishu subtasks.
+    # Sections cannot nest, so subprojects are sibling sections.
     class TaskSync
       MAX_TEXT = 3000
 
@@ -73,83 +73,77 @@ module Redmine
 
         Rails.logger.info {"Feishu sync running project=#{project_id}"}
         mapping = FeishuProjectMapping.find_by(:project_id => project_id)
-        return ensure_project_task(project) unless mapping
+        return ensure_project_section(project) unless mapping
 
-        parent_guid = project_parent_task_guid(project)
-        return move_project(project, parent_guid) if mapping.parent_task_guid != parent_guid
-
-        task = {:summary => project_summary(project), :description => project_description(project)}
-        fields = %w(summary description)
-        completed = !project.active?
-        if completed != mapping.task_completed?
-          task[:completed_at] = completed ? now_ms : '0'
-          fields << 'completed_at'
+        name = section_name(project)
+        begin
+          @client.patch_section(mapping.section_guid, {:name => name}, %w(name))
+        rescue Error => e
+          if e.not_found?
+            mapping.destroy
+            return ensure_project_section(project)
+          end
+          raise
         end
-        @client.patch_task(mapping.task_guid, task, fields)
-        ensure_in_shared_tasklist(mapping.task_guid)
-        members = sync_members(mapping.task_guid, project_member_entries(project), mapping.member_open_ids)
-        mapping.update(:task_completed => completed, :member_open_ids => members)
       end
 
-      def sync_project_destroy(project_id, task_guid = nil, _tasklist_guid = nil)
+      def sync_project_destroy(project_id, section_guid = nil, _unused = nil)
         mapping = FeishuProjectMapping.find_by(:project_id => project_id)
-        guid = task_guid.presence || mapping&.task_guid
-        delete_remote_task(guid)
+        guid = section_guid.presence || mapping&.section_guid
+        delete_remote_section(guid)
         FeishuProjectMapping.where(:project_id => project_id).delete_all
       end
 
       private
 
+      # Parent is only a synced parent issue. Root issues sit in the project section.
       def parent_task_guid_for(issue)
         parent = issue.parent
-        if parent && self.class.enabled_for?(parent)
-          sync(parent.id) unless FeishuTaskMapping.exists?(:issue_id => parent.id)
-          guid = FeishuTaskMapping.where(:issue_id => parent.id).pick(:task_guid)
-          return guid if guid.present?
-        end
-        ensure_project_task(issue.project)
+        return unless parent && self.class.enabled_for?(parent)
+
+        sync(parent.id) unless FeishuTaskMapping.exists?(:issue_id => parent.id)
+        FeishuTaskMapping.where(:issue_id => parent.id).pick(:task_guid)
       end
 
-      def project_parent_task_guid(project)
-        parent = project.ancestors.reorder(:lft => :desc).detect {|p| self.class.project_enabled?(p)}
-        parent && ensure_project_task(parent)
-      end
-
-      def ensure_project_task(project)
+      # Returns section_guid, or nil when the shared list / section API is unavailable.
+      def ensure_project_section(project)
         mapping = FeishuProjectMapping.find_by(:project_id => project.id)
-        return mapping.task_guid if mapping&.task_guid.present?
+        if mapping&.section_guid.present?
+          begin
+            @client.get_section(mapping.section_guid)
+            return mapping.section_guid
+          rescue Error => e
+            raise unless e.not_found?
+
+            # Old rows may still hold a former project-task guid; drop and recreate.
+            delete_remote_task(mapping.section_guid)
+            mapping.destroy
+          end
+        end
 
         tasklist_guid = ensure_shared_tasklist
-        parent_guid = project_parent_task_guid(project)
-        entries = project_member_entries(project)
-        payload = {
-          :summary => project_summary(project),
-          :description => project_description(project),
-          :client_token => ['redmine-project', project.id, parent_guid].compact.join('-'),
-          :origin => origin_for(project),
-          :completed_at => project.active? ? '0' : now_ms
-        }
-        payload[:members] = members_payload(entries) if entries.any?
-        apply_shared_tasklist!(payload, tasklist_guid)
-        result = parent_guid ? @client.create_subtask(parent_guid, payload) : @client.create_task(payload)
-        guid = result['guid']
-        raise Error, 'create project task returned no guid' if guid.blank?
+        return if tasklist_guid.blank?
 
-        FeishuProjectMapping.create!(
-          :project => project,
-          :task_guid => guid,
-          :parent_task_guid => parent_guid,
-          :member_open_ids => stored_open_ids(entries),
-          :task_completed => !project.active?
-        )
-        ensure_in_shared_tasklist(guid, tasklist_guid)
+        guid = @client.create_section(
+          :name => section_name(project),
+          :resource_type => 'tasklist',
+          :resource_id => tasklist_guid
+        )['guid']
+        raise Error, 'create section returned no guid' if guid.blank?
+
+        FeishuProjectMapping.create!(:project => project, :section_guid => guid)
+        Rails.logger.info {"Feishu sync created section project=#{project.id} guid=#{guid}"}
         guid
       rescue ActiveRecord::RecordNotUnique
-        FeishuProjectMapping.where(:project_id => project.id).pick(:task_guid)
+        FeishuProjectMapping.where(:project_id => project.id).pick(:section_guid)
+      rescue Error => e
+        Rails.logger.error do
+          "Feishu project section unavailable project=#{project.id}: #{e.message}"
+        end
+        nil
       end
 
-      # One Feishu tasklist holds every Redmine project/issue task. Hierarchy is
-      # expressed with parent tasks (project → issue → sub-issue), not separate lists.
+      # One Feishu tasklist holds every Redmine project section / issue task.
       # Returns nil when the app lacks tasklist permission so task sync can continue.
       def ensure_shared_tasklist
         guid = configured_tasklist_guid
@@ -180,31 +174,19 @@ module Redmine
         nil
       end
 
-      # Feishu cannot re-parent a task, so delete the project's subtree
-      # (subproject tasks and issue tasks) and recreate what was synced.
-      def move_project(project, parent_guid)
-        project_ids = project.self_and_descendants.ids
-        issue_ids = Issue.where(:project_id => project_ids).ids
-        stale_projects = FeishuProjectMapping.where(:project_id => project_ids).to_a
-        stale_issues = FeishuTaskMapping.where(:issue_id => issue_ids).to_a
-        (stale_projects + stale_issues).each do |m|
-          delete_remote_task(m.task_guid)
-          m.destroy
-        end
-        Project.where(:id => stale_projects.map(&:project_id)).order(:lft).each do |p|
-          ensure_project_task(p)
-        end
-        Issue.where(:id => stale_issues.map(&:issue_id)).order(:root_id, :lft).each {|i| sync(i.id)}
-        Rails.logger.info {"Feishu project=#{project.id} moved under parent=#{parent_guid.inspect}"}
-      end
-
       def create_task(issue, parent_guid)
         tasklist_guid = ensure_shared_tasklist
+        section_guid = ensure_project_section(issue.project)
         entries = member_entries_for(issue)
-        payload = create_payload(issue, entries, tasklist_guid)
+        payload = create_payload(issue, entries, tasklist_guid, section_guid)
         # client_token is idempotent for 5 minutes, so a recreated task needs a new one.
         payload[:client_token] = "redmine-issue-#{issue.id}-#{parent_guid}"
-        guid = @client.create_subtask(parent_guid, payload)['guid']
+        result = if parent_guid.present?
+                   @client.create_subtask(parent_guid, payload)
+                 else
+                   @client.create_task(payload)
+                 end
+        guid = result['guid']
         raise Error, 'create task returned no guid' if guid.blank?
 
         FeishuTaskMapping.create!(
@@ -214,7 +196,7 @@ module Redmine
           :assignee_open_id => stored_open_ids(entries),
           :task_completed => issue.closed?
         )
-        ensure_in_shared_tasklist(guid, tasklist_guid)
+        ensure_in_shared_tasklist(guid, tasklist_guid, section_guid)
       end
 
       # Feishu cannot re-parent a task, so delete it and its synced descendants
@@ -255,7 +237,9 @@ module Redmine
           Rails.logger.error {"Feishu sync members failed issue=#{issue.id}: #{e.message}"}
         end
         # Tasklist failures must not fail the job after a successful field patch.
-        ensure_in_shared_tasklist(mapping.task_guid)
+        ensure_in_shared_tasklist(
+          mapping.task_guid, :resolve, ensure_project_section(issue.project)
+        )
         mapping.save
         raise errors.first if errors.any?
       end
@@ -274,7 +258,13 @@ module Redmine
         raise unless e.not_found?
       end
 
-      def create_payload(issue, entries, tasklist_guid = nil)
+      def delete_remote_section(guid)
+        @client.delete_section(guid) if guid.present?
+      rescue Error => e
+        raise unless e.not_found?
+      end
+
+      def create_payload(issue, entries, tasklist_guid = nil, section_guid = nil)
         payload = {
           :summary => summary_for(issue),
           :description => description_for(issue),
@@ -283,7 +273,7 @@ module Redmine
         payload.merge!(start_and_due(issue))
         payload[:completed_at] = completed_at_for(issue)
         payload[:members] = members_payload(entries) if entries.any?
-        apply_shared_tasklist!(payload, tasklist_guid)
+        apply_shared_tasklist!(payload, tasklist_guid, section_guid)
         payload
       end
 
@@ -291,21 +281,27 @@ module Redmine
         Setting.feishu_tasklist_guid.to_s.strip.presence
       end
 
-      def apply_shared_tasklist!(payload, tasklist_guid = nil)
+      def apply_shared_tasklist!(payload, tasklist_guid = nil, section_guid = nil)
         guid = tasklist_guid.presence || configured_tasklist_guid
-        payload[:tasklists] = [{:tasklist_guid => guid}] if guid.present?
+        return if guid.blank?
+
+        entry = {:tasklist_guid => guid}
+        entry[:section_guid] = section_guid if section_guid.present?
+        payload[:tasklists] = [entry]
       end
 
       # Pass an explicit tasklist_guid (including nil after a failed ensure) to
       # avoid retrying create; omit the argument to resolve the shared list.
-      def ensure_in_shared_tasklist(task_guid, tasklist_guid = :resolve)
+      def ensure_in_shared_tasklist(task_guid, tasklist_guid = :resolve, section_guid = nil)
         return if task_guid.blank?
 
         list = (tasklist_guid == :resolve) ? ensure_shared_tasklist : tasklist_guid
         return if list.blank?
 
-        @client.add_tasklist(task_guid, list)
-        Rails.logger.info {"Feishu sync tasklist guid=#{task_guid} list=#{list}"}
+        @client.add_tasklist(task_guid, list, :section_guid => section_guid)
+        Rails.logger.info do
+          "Feishu sync tasklist guid=#{task_guid} list=#{list} section=#{section_guid.inspect}"
+        end
       rescue Error => e
         Rails.logger.error {"Feishu sync tasklist failed guid=#{task_guid}: #{e.message}"}
         nil
@@ -366,14 +362,6 @@ module Redmine
         entries = []
         entries << "assignee:#{assignee}" if assignee.present?
         entries + followers.map {|id| "follower:#{id}"}
-      end
-
-      # Active project members are Feishu assignees; the global open_id list
-      # are followers (CC).
-      def project_member_entries(project)
-        assignees = project.users.sort_by(&:id).filter_map {|user| resolve_open_id(user)}.uniq
-        followers = default_open_ids - assignees
-        assignees.map {|id| "assignee:#{id}"} + followers.map {|id| "follower:#{id}"}
       end
 
       def members_payload(entries)
@@ -452,12 +440,8 @@ module Redmine
         ("#{::I18n.t(:label_comment_plural)}:\n" + blocks.join("\n\n"))
       end
 
-      def project_summary(project)
-        truncate_text("[#{::I18n.t(:label_project)}] #{project.name}")
-      end
-
-      def project_description(project)
-        truncate_text(project.description.to_s.strip)
+      def section_name(project)
+        truncate_text(project.name.to_s)
       end
 
       def truncate_text(text)
@@ -478,11 +462,7 @@ module Redmine
 
       # Origin is create-only, so its title must not contain renamable content.
       def origin_title(record)
-        if record.is_a?(Project)
-          "#{::I18n.t(:label_project)} #{record.identifier}"
-        else
-          "#{::I18n.t(:label_issue)} ##{record.id}"
-        end
+        "#{::I18n.t(:label_issue)} ##{record.id}"
       end
 
       def record_url(record)
@@ -521,10 +501,6 @@ module Redmine
         else
           '0'
         end
-      end
-
-      def now_ms
-        (Time.current.to_f * 1000).to_i.to_s
       end
     end
   end

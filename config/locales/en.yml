@@ -523,8 +523,8 @@ en:
   field_feishu_open_id: Feishu open_id
   text_feishu_user_open_id_info: Used as the Feishu task assignee when this user is assigned to an issue (starts with ou_). Leave blank to look it up by email.
   text_feishu_task_sync_info: When enabled, all synced projects and issues go into one Feishu tasklist. Each project is a parent task; its issues are subtasks (child issues nest under their parent issue). Creating, updating, closing, and deleting is mirrored to Feishu.
-  text_feishu_default_open_id_info: These users are added as followers (CC) on every Feishu task, including project tasks (comma, space, or newline separated). Get open_id from the Feishu Open Platform API explorer (starts with ou_).
-  text_feishu_tasklist_guid_info: 'All project and issue tasks are placed in this one Feishu tasklist. Leave blank to auto-create a list named "Redmine" and save its GUID here, or paste an existing list GUID. The app needs task:tasklist:write published; without it tasks still sync, they just will not join a list. Hierarchy inside the list: project task → issue → sub-issue.'
+  text_feishu_default_open_id_info: These users are added as followers (CC) on every Feishu issue task (comma, space, or newline separated). Get open_id from the Feishu Open Platform API explorer (starts with ou_).
+  text_feishu_tasklist_guid_info: 'All projects and issues go into this one Feishu tasklist. Leave blank to auto-create a list named "Redmine" and save its GUID here, or paste an existing list GUID. The app needs task:tasklist:write and task:section:write published; without them tasks still sync, they just will not join a list/section. Inside the list: each project is a custom section; issues are tasks in that section; child issues are subtasks.'
   text_feishu_issue_base_url_info: Used in Feishu task links, e.g. http://118.178.179.139:12323 (no trailing slash). Leave blank to use Administration → Settings → General → Host name.
   setting_default_projects_tracker_ids: Default trackers for new projects
   setting_mail_handler_excluded_filenames: Exclude attachments by name

@@ -7,8 +7,8 @@ module Project::FeishuSyncable
   extend ActiveSupport::Concern
 
   included do
-    # Capture task_guid before dependent: :delete removes the mapping row.
-    before_destroy :store_feishu_task_guid_for_sync, :prepend => true
+    # Capture section_guid before dependent: :delete removes the mapping row.
+    before_destroy :store_feishu_section_guid_for_sync, :prepend => true
     has_one :feishu_project_mapping, :dependent => :delete
     after_save_commit :enqueue_feishu_project_sync
     after_destroy_commit :enqueue_feishu_project_destroy
@@ -22,7 +22,7 @@ module Project::FeishuSyncable
   private
 
   def enqueue_feishu_project_sync
-    enqueue_feishu_project_updates(saved_change_to_parent_id? ? self_and_descendants.ids : [id])
+    enqueue_feishu_project_updates([id])
   end
 
   def enqueue_feishu_project_updates(ids)
@@ -36,12 +36,12 @@ module Project::FeishuSyncable
     end
   end
 
-  def store_feishu_task_guid_for_sync
-    @feishu_task_guid_for_sync = feishu_project_mapping&.task_guid
+  def store_feishu_section_guid_for_sync
+    @feishu_section_guid_for_sync = feishu_project_mapping&.section_guid
   end
 
   def enqueue_feishu_project_destroy
-    guid = @feishu_task_guid_for_sync
+    guid = @feishu_section_guid_for_sync
     return if guid.blank?
 
     FeishuTaskSyncJob.perform_later('project_destroy', id, guid)

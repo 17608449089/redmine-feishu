@@ -49,7 +49,7 @@ class FeishuTaskSyncJobTest < ActiveJob::TestCase
 
   def test_project_close_enqueues_project_sync
     enable_sync!
-    FeishuProjectMapping.create!(:project_id => 1, :task_guid => 'guid-p')
+    FeishuProjectMapping.create!(:project_id => 1, :section_guid => 'guid-p')
     assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['project_update', 1]) do
       Project.find(1).close
     end
@@ -70,45 +70,12 @@ class FeishuTaskSyncJobTest < ActiveJob::TestCase
     end
   end
 
-  def test_project_parent_change_enqueues_sync_for_mapped_subtree
-    enable_sync!
-    FeishuProjectMapping.create!(:project_id => 6, :task_guid => 'guid-6')
-    project = Project.find(5)
-    assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['project_update', 6]) do
-      project.parent_id = 2
-      project.save!
-    end
-  end
-
-  def test_project_destroy_enqueues_job_with_task_guid
+  def test_project_destroy_enqueues_job_with_section_guid
     enable_sync!
     project = Project.generate!
-    FeishuProjectMapping.create!(:project => project, :task_guid => 'guid-pd')
+    FeishuProjectMapping.create!(:project => project, :section_guid => 'guid-pd')
     assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['project_destroy', project.id, 'guid-pd']) do
       project.destroy
-    end
-  end
-
-  def test_member_added_enqueues_project_sync
-    enable_sync!
-    user = User.generate!
-    assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['project_update', 1]) do
-      Member.create!(:project_id => 1, :principal => user, :role_ids => [1])
-    end
-  end
-
-  def test_member_removed_enqueues_project_sync
-    enable_sync!
-    member = Member.find_by(:project_id => 1, :user_id => 2)
-    assert_enqueued_with(:job => FeishuTaskSyncJob, :args => ['project_update', 1]) do
-      member.destroy
-    end
-  end
-
-  def test_member_change_in_disabled_project_does_not_enqueue
-    Setting.feishu_task_sync_enabled = '1'
-    assert_no_enqueued_jobs :only => FeishuTaskSyncJob do
-      Member.create!(:project_id => 2, :principal => User.generate!, :role_ids => [1])
     end
   end
 

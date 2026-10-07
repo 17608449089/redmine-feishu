@@ -23,7 +23,6 @@ class Member < ApplicationRecord
   has_many :member_roles, :dependent => :destroy
   has_many :roles, lambda {distinct}, :through => :member_roles
   belongs_to :project
-  include Member::FeishuSyncable
 
   validates_presence_of :principal, :project
   validates_uniqueness_of :user_id, :scope => :project_id, :case_sensitive => true
